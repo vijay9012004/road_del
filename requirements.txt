@@ -2,7 +2,7 @@ streamlit
 streamlit-webrtc
 opencv-python
 numpy
-tensorflow
 keras
-av
+tensorflow
 gdown
+av
