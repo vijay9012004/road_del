@@ -1,6 +1,11 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import cv2, os, av, numpy as np, tempfile, gdown
+import cv2
+import os
+import av
+import numpy as np
+import tempfile
+import gdown
 from keras.models import load_model
 
 # ===================== PAGE CONFIG =====================
@@ -10,14 +15,18 @@ st.title("Road Anomaly Detection using CNN")
 # ===================== CONSTANTS =====================
 MODEL_FILE = "road_anomaly_model.h5"
 FILE_ID = "1FiHUDZPL1MFyG1g06_jjM4MJV2tH9rpg"
-CLASS_NAMES = ['Accident', 'Fight', 'Fire', 'Snatching']
+CLASS_NAMES = ["Accident", "Fight", "Fire", "Snatching"]
 CONF_THRESHOLD = 0.85
 IMG_SIZE = (224, 224)
 
 # ===================== MODEL DOWNLOAD =====================
 def download_model():
     if not os.path.exists(MODEL_FILE):
-        gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE, quiet=False)
+        gdown.download(
+            f"https://drive.google.com/uc?id={FILE_ID}",
+            MODEL_FILE,
+            quiet=False
+        )
 
 download_model()
 
@@ -40,10 +49,16 @@ def predict_anomaly(img):
     class_id = int(np.argmax(preds))
     confidence = float(np.max(preds))
     emergency = 1 if confidence >= CONF_THRESHOLD else 0
-    return {"class": CLASS_NAMES[class_id], "confidence": confidence, "emergency": emergency}
+    return {
+        "class": CLASS_NAMES[class_id],
+        "confidence": confidence,
+        "emergency": emergency
+    }
 
 # ===================== RTC CONFIG =====================
-RTC_CONFIG = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+RTC_CONFIG = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
 # ===================== VIDEO PROCESSOR =====================
 class AnomalyProcessor(VideoProcessorBase):
@@ -57,9 +72,11 @@ class AnomalyProcessor(VideoProcessorBase):
         label = f"{result['class']} ({result['confidence']*100:.1f}%)"
         color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
-        cv2.putText(img, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        cv2.putText(img, label, (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
         cv2.putText(img, f"EMERGENCY: {result['emergency']}",
-                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
         self.current_result = result
         return av.VideoFrame.from_ndarray(img, format="bgr24")
@@ -87,7 +104,7 @@ elif mode == "📡 Live Webcam":
         key="road-webcam",
         video_processor_factory=AnomalyProcessor,
         rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={"video": True, "audio": False}
+        media_stream_constraints={"video": True, "audio": False},
     )
 
     if ctx and ctx.video_processor:
@@ -100,71 +117,91 @@ elif mode == "📡 Live Webcam":
             else:
                 st.success("✅ Normal Condition")
 
-# ===================== UNIFIED UPLOAD =====================
+# ===================== UPLOAD (CHATGPT STYLE + BUTTON) =====================
 elif mode == "⬆ Upload":
 
     st.subheader("Upload Image / Video / File")
 
-    file_type = st.radio(
-        "Select Upload Type",
-        ["📷 Image", "🎥 Video", "📁 File"],
-        horizontal=True
-    )
-
-    if file_type == "📷 Image":
-        types = ["jpg", "jpeg", "png"]
-    elif file_type == "🎥 Video":
-        types = ["mp4", "avi", "mov", "mpeg4"]
-    else:
-        types = ["csv", "txt", "xlsx", "pdf"]
+    # ---------- CSS FOR CHATGPT STYLE "+" BUTTON ----------
+    st.markdown("""
+    <style>
+    div[data-testid="stFileUploader"] > label {display:none;}
+    div[data-testid="stFileUploader"] section {
+        padding:0; border:none; background:transparent;
+    }
+    div[data-testid="stFileUploader"] section button {
+        width:44px; height:44px;
+        border-radius:50%;
+        border:1px solid #ccc;
+        background:#f4f4f4;
+        font-size:22px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        margin:auto;
+    }
+    div[data-testid="stFileUploader"] section button:hover {
+        background:#e6e6e6;
+    }
+    div[data-testid="stFileUploader"] section button p {
+        display:none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
-        "Click to Upload",
-        type=types,
+        "+",
+        type=["jpg", "jpeg", "png", "mp4", "avi", "mov", "pdf", "txt"],
         accept_multiple_files=False
     )
 
-    # ---------- IMAGE ----------
-    if uploaded_file and file_type == "📷 Image":
-        img_bytes = np.asarray(bytearray(uploaded_file.read()), np.uint8)
-        img = cv2.imdecode(img_bytes, 1)
-        st.image(img, channels="BGR", use_container_width=True)
+    if uploaded_file is not None:
+        st.write(f"**Uploaded:** {uploaded_file.name}")
 
-        if st.button("🔍 Predict Image"):
-            result = predict_anomaly(img)
-            st.write(result)
-            if result["emergency"]:
-                st.error("🚨 EMERGENCY DETECTED")
-            else:
-                st.success("✅ Normal Condition")
+        # ---------- IMAGE ----------
+        if uploaded_file.type.startswith("image"):
+            img_bytes = np.asarray(bytearray(uploaded_file.read()), np.uint8)
+            img = cv2.imdecode(img_bytes, 1)
+            st.image(img, channels="BGR", use_container_width=True)
 
-    # ---------- VIDEO ----------
-    elif uploaded_file and file_type == "🎥 Video":
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
+            if st.button("🔍 Predict Image"):
+                result = predict_anomaly(img)
+                st.write(result)
+                if result["emergency"]:
+                    st.error("🚨 EMERGENCY DETECTED")
+                else:
+                    st.success("✅ Normal Condition")
 
-        if st.button("▶ Analyze Video"):
-            cap = cv2.VideoCapture(tfile.name)
-            frame_box = st.empty()
+        # ---------- VIDEO ----------
+        elif uploaded_file.type.startswith("video"):
+            tfile = tempfile.NamedTemporaryFile(delete=False)
+            tfile.write(uploaded_file.read())
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            if st.button("▶ Analyze Video"):
+                cap = cv2.VideoCapture(tfile.name)
+                frame_box = st.empty()
 
-                result = predict_anomaly(frame)
-                label = f"{result['class']} ({result['confidence']*100:.1f}%)"
-                color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                cv2.putText(frame, label, (20, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                    result = predict_anomaly(frame)
+                    label = f"{result['class']} ({result['confidence']*100:.1f}%)"
+                    color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
-                frame_box.image(frame, channels="BGR", use_container_width=True)
+                    cv2.putText(frame, label, (20, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-            cap.release()
+                    frame_box.image(frame, channels="BGR", use_container_width=True)
 
-    # ---------- FILE ----------
-    elif uploaded_file and file_type == "📁 File":
-        st.success("File Uploaded Successfully")
-        st.write("File Name:", uploaded_file.name)
-        st.write("File Size:", uploaded_file.size, "bytes")
+                cap.release()
+
+        # ---------- FILE ----------
+        else:
+            st.success("File uploaded successfully")
+            st.write("File type:", uploaded_file.type)
+            st.write("File size:", uploaded_file.size, "bytes")
+
+    else:
+        st.info("Click the + button to upload an image, video, or file.")
