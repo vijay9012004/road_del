@@ -66,8 +66,10 @@ if mode == "About":
     st.markdown("""
     **Project:** Road Anomaly Detection  
     **Developer:** Vijay Ragavan  
-    **Description:** CNN-based system to detect road anomalies such as
-    accidents, fire, fights, and snatching.
+    **College:** Kamarajar Engineering College of Technology  
+
+    CNN-based system for detecting road anomalies such as accidents,
+    fire, fights, and snatching.
     """)
 
 # ===================== IMAGE UPLOAD =====================
@@ -120,7 +122,6 @@ elif mode == "Upload Video":
 
                 result = predict_anomaly(frame)
                 label = f"{result['class']} ({result['confidence']*100:.1f}%)"
-
                 color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
                 cv2.putText(
