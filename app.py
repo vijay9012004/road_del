@@ -22,12 +22,11 @@ IMG_SIZE = (224, 224)
 # ===================== MODEL DOWNLOAD =====================
 def download_model():
     if not os.path.exists(MODEL_FILE):
-        with st.spinner("Downloading model..."):
-            gdown.download(
-                f"https://drive.google.com/uc?id={FILE_ID}",
-                MODEL_FILE,
-                quiet=False
-            )
+        gdown.download(
+            f"https://drive.google.com/uc?id={FILE_ID}",
+            MODEL_FILE,
+            quiet=False
+        )
 
 download_model()
 
@@ -64,6 +63,9 @@ RTC_CONFIG = RTCConfiguration({
 
 # ===================== VIDEO PROCESSOR =====================
 class AnomalyProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.current_result = {}
+
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
         result = predict_anomaly(img)
@@ -76,8 +78,9 @@ class AnomalyProcessor(VideoProcessorBase):
 
         cv2.putText(img, f"EMERGENCY: {result['emergency']}",
                     (20, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
+        self.current_result = result
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # ===================== SIDEBAR =====================
@@ -92,20 +95,30 @@ if mode == "ℹ About":
     st.markdown("""
     **Road Anomaly Detection System**  
     Developer: Vijay Ragavan  
-    College: Kamarajar Engineering College of Technology  
-    Technology: CNN + Streamlit + WebRTC  
+    College: Kamarajar Engineering College of Technology
     """)
 
 # ===================== LIVE WEBCAM =====================
 elif mode == "📡 Live Webcam":
     st.subheader("Live Road Anomaly Detection")
 
-    webrtc_streamer(
+    ctx = webrtc_streamer(
         key="road-webcam",
         video_processor_factory=AnomalyProcessor,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={"video": True, "audio": False}
     )
+
+    if ctx and ctx.video_processor:
+        res = ctx.video_processor.current_result
+        if res:
+            st.write("Prediction:", res["class"])
+            st.write("Confidence:", f"{res['confidence']*100:.1f}%")
+
+            if res["emergency"]:
+                st.error("🚨 EMERGENCY DETECTED")
+            else:
+                st.success("✅ Normal Condition")
 
 # ===================== UPLOAD =====================
 elif mode == "⬆ Upload":
@@ -127,10 +140,7 @@ elif mode == "⬆ Upload":
 
         if st.button("🔍 Predict Image"):
             result = predict_anomaly(img)
-
-            st.subheader("Prediction Result")
-            st.write("Class:", result["class"])
-            st.write("Confidence:", f"{result['confidence']*100:.2f}%")
+            st.write(result)
 
             if result["emergency"]:
                 st.error("🚨 EMERGENCY DETECTED")
@@ -152,7 +162,6 @@ elif mode == "⬆ Upload":
                     break
 
                 result = predict_anomaly(frame)
-
                 label = f"{result['class']} ({result['confidence']*100:.1f}%)"
                 color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
@@ -162,4 +171,3 @@ elif mode == "⬆ Upload":
                 frame_box.image(frame, channels="BGR", use_container_width=True)
 
             cap.release()
-            st.success("Video analysis completed")
