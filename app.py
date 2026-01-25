@@ -22,7 +22,12 @@ IMG_SIZE = (224, 224)
 # ===================== MODEL DOWNLOAD =====================
 def download_model():
     if not os.path.exists(MODEL_FILE):
-        gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE, quiet=False)
+        with st.spinner("Downloading model..."):
+            gdown.download(
+                f"https://drive.google.com/uc?id={FILE_ID}",
+                MODEL_FILE,
+                quiet=False
+            )
 
 download_model()
 
@@ -45,7 +50,12 @@ def predict_anomaly(img):
     class_id = int(np.argmax(preds))
     confidence = float(np.max(preds))
     emergency = 1 if confidence >= CONF_THRESHOLD else 0
-    return {"class": CLASS_NAMES[class_id], "confidence": confidence, "emergency": emergency}
+
+    return {
+        "class": CLASS_NAMES[class_id],
+        "confidence": confidence,
+        "emergency": emergency
+    }
 
 # ===================== RTC CONFIG =====================
 RTC_CONFIG = RTCConfiguration({
@@ -54,9 +64,6 @@ RTC_CONFIG = RTCConfiguration({
 
 # ===================== VIDEO PROCESSOR =====================
 class AnomalyProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.current_result = {}
-
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
         result = predict_anomaly(img)
@@ -64,14 +71,20 @@ class AnomalyProcessor(VideoProcessorBase):
         label = f"{result['class']} ({result['confidence']*100:.1f}%)"
         color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
-        cv2.putText(img, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        cv2.putText(img, f"EMERGENCY: {result['emergency']}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        cv2.putText(img, label, (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-        self.current_result = result
+        cv2.putText(img, f"EMERGENCY: {result['emergency']}",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # ===================== SIDEBAR =====================
-mode = st.sidebar.radio("Select Mode", ["📡 Live Webcam", "⬆ Upload", "ℹ About"])
+mode = st.sidebar.radio(
+    "Select Mode",
+    ["📡 Live Webcam", "⬆ Upload", "ℹ About"]
+)
 
 # ===================== ABOUT =====================
 if mode == "ℹ About":
@@ -79,85 +92,74 @@ if mode == "ℹ About":
     st.markdown("""
     **Road Anomaly Detection System**  
     Developer: Vijay Ragavan  
-    College: Kamarajar Engineering College of Technology
+    College: Kamarajar Engineering College of Technology  
+    Technology: CNN + Streamlit + WebRTC  
     """)
 
 # ===================== LIVE WEBCAM =====================
 elif mode == "📡 Live Webcam":
     st.subheader("Live Road Anomaly Detection")
 
-    ctx = webrtc_streamer(
+    webrtc_streamer(
         key="road-webcam",
         video_processor_factory=AnomalyProcessor,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={"video": True, "audio": False}
     )
 
-    if ctx and ctx.video_processor:
-        res = ctx.video_processor.current_result
-        if res:
-            st.write("Prediction:", res["class"])
-            st.write("Confidence:", f"{res['confidence']*100:.1f}%")
+# ===================== UPLOAD =====================
+elif mode == "⬆ Upload":
 
-            if res["emergency"]:
+    st.subheader("Upload Image or Video")
+
+    uploaded_file = st.file_uploader(
+        "➕ Add files",
+        type=["jpg", "jpeg", "png", "mp4", "avi"],
+        accept_multiple_files=False
+    )
+
+    # ---------- IMAGE ----------
+    if uploaded_file and uploaded_file.type.startswith("image"):
+        img_bytes = np.asarray(bytearray(uploaded_file.read()), np.uint8)
+        img = cv2.imdecode(img_bytes, 1)
+
+        st.image(img, channels="BGR", use_container_width=True)
+
+        if st.button("🔍 Predict Image"):
+            result = predict_anomaly(img)
+
+            st.subheader("Prediction Result")
+            st.write("Class:", result["class"])
+            st.write("Confidence:", f"{result['confidence']*100:.2f}%")
+
+            if result["emergency"]:
                 st.error("🚨 EMERGENCY DETECTED")
             else:
                 st.success("✅ Normal Condition")
 
-# ===================== UPLOAD =====================
-elif mode == "⬆ Upload":
+    # ---------- VIDEO ----------
+    elif uploaded_file and uploaded_file.type.startswith("video"):
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(uploaded_file.read())
 
-    st.subheader("Upload Image, Video or File")
+        if st.button("▶ Analyze Video"):
+            cap = cv2.VideoCapture(tfile.name)
+            frame_box = st.empty()
 
-    uploaded_file = st.file_uploader(
-        "➕ Add files",
-        type=["jpg", "jpeg", "png", "mp4", "avi", "pdf", "bmp", "webp"],
-        accept_multiple_files=False
-    )
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-    if uploaded_file is not None:
-        st.success("File uploaded successfully")
-        st.write("File name:", uploaded_file.name)
-        st.write("File type:", uploaded_file.type)
-        st.write("File size:", uploaded_file.size, "bytes")
+                result = predict_anomaly(frame)
 
-        # ---------- IMAGE ----------
-        if uploaded_file.type.startswith("image"):
-            img_bytes = np.asarray(bytearray(uploaded_file.read()), np.uint8)
-            img = cv2.imdecode(img_bytes, 1)
-            st.image(img, channels="BGR", use_container_width=True)
+                label = f"{result['class']} ({result['confidence']*100:.1f}%)"
+                color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
 
-            if st.button("🔍 Predict Image"):
-                result = predict_anomaly(img)
-                st.write(result)
-                if result["emergency"]:
-                    st.error("🚨 EMERGENCY DETECTED")
-                else:
-                    st.success("✅ Normal Condition")
+                cv2.putText(frame, label, (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-        # ---------- VIDEO ----------
-        elif uploaded_file.type.startswith("video"):
-            tfile = tempfile.NamedTemporaryFile(delete=False)
-            tfile.write(uploaded_file.read())
+                frame_box.image(frame, channels="BGR", use_container_width=True)
 
-            if st.button("▶ Analyze Video"):
-                cap = cv2.VideoCapture(tfile.name)
-                frame_box = st.empty()
-
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-
-                    result = predict_anomaly(frame)
-                    label = f"{result['class']} ({result['confidence']*100:.1f}%)"
-                    color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
-
-                    cv2.putText(frame, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    frame_box.image(frame, channels="BGR", use_container_width=True)
-
-                cap.release()
-
-        # ---------- OTHER FILES ----------
-        else:
-            st.info("File uploaded successfully (non-image/video file)")
+            cap.release()
+            st.success("Video analysis completed")
