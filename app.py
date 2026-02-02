@@ -1,12 +1,19 @@
+# ===================== IMPORTS =====================
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import cv2, os, av, numpy as np, tempfile, gdown
+import cv2
+import os
+import av
+import numpy as np
+import tempfile
+import gdown
 from keras.models import load_model
-import requests  # For Discord webhook
+import requests
+import time
 
 # ===================== PAGE CONFIG =====================
 st.set_page_config(page_title="Road Anomaly Detection", layout="wide")
-st.title("Road Anomaly Detection with Discord Alerts 🚨")
+st.title("🚦 Road Anomaly Detection with Discord Alerts")
 
 # ===================== CONSTANTS =====================
 MODEL_FILE = "road_anomaly_model.h5"
@@ -23,7 +30,7 @@ def send_discord_alert(message: str):
     payload = {"content": message}
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if response.status_code != 204 and response.status_code != 200:
+        if response.status_code not in [200, 204]:
             st.warning(f"Discord alert failed: {response.status_code}")
     except Exception as e:
         st.error(f"Discord alert error: {e}")
@@ -41,7 +48,7 @@ def load_cnn_model():
 
 model = load_cnn_model()
 
-# ===================== PREPROCESS =====================
+# ===================== IMAGE PREPROCESS =====================
 def preprocess_image(img):
     img = cv2.resize(img, IMG_SIZE)
     img = img.astype("float32") / 255.0
@@ -81,6 +88,7 @@ class AnomalyProcessor(VideoProcessorBase):
             send_discord_alert(alert_msg)
         self.prev_anomaly = bool(self.current_result["emergency"])
 
+        # Add text overlay
         cv2.putText(img, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
         cv2.putText(img, f"Anomalies Detected: {self.anomaly_count}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
         cv2.putText(img, f"EMERGENCY: {self.current_result['emergency']}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
@@ -102,29 +110,41 @@ if mode == "About":
     **Project Name:** Road Anomaly Detector  
     **Developer:** Vijay Ragavan  
     **College:** Kamarajar Engineering College of Technology  
-    **Description:** Real-time road anomaly detection using CNN to detect accidents, fights, fires, or snatching events, with Discord alerts.
+    **Description:** Real-time road anomaly detection using CNN to detect accidents, fights, fires, or snatching events.  
+    Automatic alerts are sent to a Discord channel for emergency monitoring.
     """)
 
 # ===================== LIVE WEBCAM =====================
 elif mode == "Live Webcam":
-    st.subheader("Live Road Anomaly Detection with Discord Alerts")
+    st.subheader("Live Road Anomaly Detection with Discord Alerts 🚨")
+    
     processor = webrtc_streamer(
         key="road-anomaly",
         video_processor_factory=AnomalyProcessor,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={"video": True, "audio": False},
-        async_processing=False,
+        async_processing=True
     )
 
+    st.markdown("""
+    **Instructions:** This live webcam continuously monitors the road scenes.  
+    Any detected accident, fire, fight, snatching, or disaster will be automatically sent to Discord.
+    """)
+
     if processor and processor.video_processor:
-        result = processor.video_processor.current_result
-        st.write("**Live Prediction Status**")
-        st.write("Prediction:", result.get("class", ""))
-        st.write("Confidence:", f"{result.get('confidence', 0)*100:.1f}%")
-        if result.get("emergency", 0):
-            st.error("🚨 EMERGENCY DETECTED")
-        else:
-            st.success("✅ Normal Condition")
+        stframe = st.empty()  # placeholder for video
+        while True:
+            result = processor.video_processor.current_result
+            # Display live annotated frame
+            if hasattr(processor.video_processor, "recv"):
+                frame = processor.video_processor.recv(av.VideoFrame.from_ndarray(np.zeros((224,224,3), dtype=np.uint8), format="bgr24"))
+                stframe.image(frame, channels="BGR", use_container_width=True)
+            
+            st.write("**Live Prediction Status**")
+            st.write("Prediction:", result.get("class", ""))
+            st.write("Confidence:", f"{result.get('confidence', 0)*100:.1f}%")
+            
+            time.sleep(1)  # avoid spamming
 
 # ===================== VIDEO UPLOAD =====================
 elif mode == "Upload Video":
