@@ -14,12 +14,11 @@ CLASS_NAMES = ["Accident", "Fight", "Fire", "Snatching"]
 CONF_THRESHOLD = 0.85
 IMG_SIZE = (224, 224)
 
-# ================= MODEL DOWNLOAD =================
-if not os.path.exists(MODEL_FILE):
-    gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE)
-
+# ================= MODEL LOAD (SAFE) =================
 @st.cache_resource
 def load_cnn():
+    if not os.path.exists(MODEL_FILE):
+        gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE)
     return load_model(MODEL_FILE)
 
 model = load_cnn()
@@ -46,7 +45,7 @@ RTC_CONFIG = RTCConfiguration(
 # ================= VIDEO PROCESSOR =================
 class AnomalyProcessor(VideoProcessorBase):
     def __init__(self):
-        self.current_result = {}
+        self.current_result = None
 
     def recv(self, frame: av.VideoFrame):
         img = frame.to_ndarray(format="bgr24")
@@ -79,17 +78,15 @@ mode = st.sidebar.radio(
 if mode == "About":
     st.subheader("About This Project")
     st.markdown("""
-    **Project:** Road Anomaly Detection System  
-    **Developer:** Vijay Ragavan  
-    **College:** Kamarajar Engineering College of Technology  
+    **Road Anomaly Detection System**  
+    Developer: Vijay Ragavan  
+    College: Kamarajar Engineering College of Technology  
 
-    Detects:
+    CNN-based detection of:
     • Accident  
     • Fight  
     • Fire  
-    • Snatching  
-
-    Uses CNN for real-time safety monitoring.
+    • Snatching
     """)
 
 # ================= LIVE WEBCAM =================
@@ -104,43 +101,29 @@ elif mode == "Live Webcam":
         async_processing=False,
     )
 
-    if ctx and ctx.video_processor:
+    if ctx and ctx.video_processor and ctx.video_processor.current_result:
         res = ctx.video_processor.current_result
-        if res:
-            st.write("### Live Prediction")
-            st.write("Class:", res["class"])
-            st.write("Confidence:", f"{res['confidence']*100:.2f}%")
-            st.error("🚨 EMERGENCY") if res["emergency"] else st.success("✅ Normal")
+        st.write("### Live Prediction")
+        st.write("Class:", res["class"])
+        st.write("Confidence:", f"{res['confidence']*100:.2f}%")
+        st.error("🚨 EMERGENCY") if res["emergency"] else st.success("✅ Normal")
 
 # ================= UPLOAD UI =================
 elif mode == "Upload ( + )":
-
     st.subheader("⬆ Upload Image or Video")
 
-    # ---------- PLUS BUTTON STYLE ----------
     st.markdown("""
     <style>
     div[data-testid="stFileUploader"] label {display:none;}
-    div[data-testid="stFileUploader"] section {
-        padding:0; border:none; background:transparent;
-    }
     div[data-testid="stFileUploader"] section button {
-        width:60px;
-        height:60px;
+        width:60px; height:60px;
         border-radius:50%;
         font-size:30px;
         background:#4CAF50;
         color:white;
         border:none;
-        display:flex;
-        align-items:center;
-        justify-content:center;
         margin:auto;
     }
-    div[data-testid="stFileUploader"] section button:hover {
-        background:#43a047;
-    }
-    div[data-testid="stFileUploader"] section button p {display:none;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -150,11 +133,12 @@ elif mode == "Upload ( + )":
     )
 
     if uploaded:
+        file_bytes = uploaded.read()  # ✅ read ONCE
         st.success(f"Uploaded: {uploaded.name}")
 
         # -------- IMAGE --------
         if uploaded.type.startswith("image"):
-            img = cv2.imdecode(np.frombuffer(uploaded.read(), np.uint8), 1)
+            img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), 1)
             st.image(img, channels="BGR", use_container_width=True)
 
             if st.button("🔍 Predict Image"):
@@ -165,11 +149,12 @@ elif mode == "Upload ( + )":
 
         # -------- VIDEO --------
         elif uploaded.type.startswith("video"):
-            tfile = tempfile.NamedTemporaryFile(delete=False)
-            tfile.write(uploaded.read())
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
+                tfile.write(file_bytes)
+                video_path = tfile.name
 
             if st.button("▶ Analyze Video"):
-                cap = cv2.VideoCapture(tfile.name)
+                cap = cv2.VideoCapture(video_path)
                 frame_box = st.empty()
 
                 while cap.isOpened():
@@ -183,7 +168,6 @@ elif mode == "Upload ( + )":
 
                     cv2.putText(frame, label, (20, 40),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-
                     frame_box.image(frame, channels="BGR", use_container_width=True)
 
                 cap.release()
