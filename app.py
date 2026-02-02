@@ -88,7 +88,7 @@ class AnomalyProcessor(VideoProcessorBase):
             send_discord_alert(alert_msg)
         self.prev_anomaly = bool(self.current_result["emergency"])
 
-        # Add text overlay
+        # Overlay text on frame
         cv2.putText(img, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
         cv2.putText(img, f"Anomalies Detected: {self.anomaly_count}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
         cv2.putText(img, f"EMERGENCY: {self.current_result['emergency']}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
@@ -127,7 +127,7 @@ elif mode == "Live Webcam":
     )
 
     st.markdown("""
-    **Instructions:** This live webcam continuously monitors the road scenes.  
+    **Instructions:** This live webcam continuously monitors road scenes.  
     Any detected accident, fire, fight, snatching, or disaster will be automatically sent to Discord.
     """)
 
