@@ -1,6 +1,9 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import cv2, os, av, numpy as np, tempfile, gdown
+import cv2
+import numpy as np
+import tempfile
+import os
+import gdown
 from keras.models import load_model
 
 # ================= PAGE CONFIG =================
@@ -14,7 +17,7 @@ CLASS_NAMES = ["Accident", "Fight", "Fire", "Snatching"]
 CONF_THRESHOLD = 0.85
 IMG_SIZE = (224, 224)
 
-# ================= MODEL LOAD (SAFE) =================
+# ================= MODEL LOAD =================
 @st.cache_resource
 def load_cnn():
     if not os.path.exists(MODEL_FILE):
@@ -32,142 +35,85 @@ def preprocess(img):
 # ================= PREDICT =================
 def predict(img):
     preds = model.predict(preprocess(img), verbose=0)
-    class_id = int(np.argmax(preds))
-    confidence = float(np.max(preds))
-    emergency = confidence >= CONF_THRESHOLD
-    return CLASS_NAMES[class_id], confidence, emergency
-
-# ================= RTC CONFIG =================
-RTC_CONFIG = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
-
-# ================= VIDEO PROCESSOR =================
-class AnomalyProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.current_result = None
-
-    def recv(self, frame: av.VideoFrame):
-        img = frame.to_ndarray(format="bgr24")
-        cls, conf, emg = predict(img)
-
-        label = f"{cls} ({conf*100:.1f}%)"
-        color = (0, 0, 255) if emg else (0, 255, 0)
-
-        cv2.putText(img, label, (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        cv2.putText(img, f"EMERGENCY: {int(emg)}",
-                    (20, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-
-        self.current_result = {
-            "class": cls,
-            "confidence": conf,
-            "emergency": emg
-        }
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+    idx = int(np.argmax(preds))
+    conf = float(np.max(preds))
+    emergency = conf >= CONF_THRESHOLD
+    return CLASS_NAMES[idx], conf, emergency
 
 # ================= SIDEBAR =================
 st.sidebar.title("🚘 Navigation")
 mode = st.sidebar.radio(
     "Select Mode",
-    ["Live Webcam", "Upload ( + )", "About"]
+    ["Upload Image", "Upload Video", "About"]
 )
 
 # ================= ABOUT =================
 if mode == "About":
-    st.subheader("About This Project")
+    st.subheader("About")
     st.markdown("""
-    **Road Anomaly Detection System**  
-    Developer: Vijay Ragavan  
-    College: Kamarajar Engineering College of Technology  
+    **Project:** Road Anomaly Detection System  
+    **Developer:** Vijay Ragavan  
+    **College:** Kamarajar Engineering College of Technology  
 
-    CNN-based detection of:
-    • Accident  
-    • Fight  
-    • Fire  
-    • Snatching
+    CNN-based classification of:
+    - Accident
+    - Fight
+    - Fire
+    - Snatching
     """)
 
-# ================= LIVE WEBCAM =================
-elif mode == "Live Webcam":
-    st.subheader("📡 Live Road Monitoring")
+# ================= IMAGE UPLOAD =================
+elif mode == "Upload Image":
+    st.subheader("📷 Upload Image")
 
-    ctx = webrtc_streamer(
-        key="road-webcam",
-        video_processor_factory=AnomalyProcessor,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=False,
+    image_file = st.file_uploader(
+        "Choose Image",
+        type=["jpg", "jpeg", "png"]
     )
 
-    if ctx and ctx.video_processor and ctx.video_processor.current_result:
-        res = ctx.video_processor.current_result
-        st.write("### Live Prediction")
-        st.write("Class:", res["class"])
-        st.write("Confidence:", f"{res['confidence']*100:.2f}%")
-        st.error("🚨 EMERGENCY") if res["emergency"] else st.success("✅ Normal")
+    if image_file:
+        img_bytes = image_file.read()
+        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), 1)
+        st.image(img, channels="BGR", use_container_width=True)
 
-# ================= UPLOAD UI =================
-elif mode == "Upload ( + )":
-    st.subheader("⬆ Upload Image or Video")
+        if st.button("🔍 Predict Image"):
+            cls, conf, emg = predict(img)
+            st.metric("Prediction", cls)
+            st.metric("Confidence", f"{conf*100:.2f}%")
+            st.error("🚨 EMERGENCY") if emg else st.success("✅ Normal")
 
-    st.markdown("""
-    <style>
-    div[data-testid="stFileUploader"] label {display:none;}
-    div[data-testid="stFileUploader"] section button {
-        width:60px; height:60px;
-        border-radius:50%;
-        font-size:30px;
-        background:#4CAF50;
-        color:white;
-        border:none;
-        margin:auto;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+# ================= VIDEO UPLOAD =================
+elif mode == "Upload Video":
+    st.subheader("🎞 Upload Video")
 
-    uploaded = st.file_uploader(
-        "+",
-        type=["jpg", "jpeg", "png", "mp4", "avi", "mov"]
+    video_file = st.file_uploader(
+        "Choose Video",
+        type=["mp4", "avi", "mov"]
     )
 
-    if uploaded:
-        file_bytes = uploaded.read()  # ✅ read ONCE
-        st.success(f"Uploaded: {uploaded.name}")
+    if video_file:
+        video_bytes = video_file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
+            tfile.write(video_bytes)
+            video_path = tfile.name
 
-        # -------- IMAGE --------
-        if uploaded.type.startswith("image"):
-            img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), 1)
-            st.image(img, channels="BGR", use_container_width=True)
+        if st.button("▶ Analyze Video"):
+            cap = cv2.VideoCapture(video_path)
+            frame_box = st.empty()
 
-            if st.button("🔍 Predict Image"):
-                cls, conf, emg = predict(img)
-                st.metric("Prediction", cls)
-                st.metric("Confidence", f"{conf*100:.2f}%")
-                st.error("🚨 EMERGENCY") if emg else st.success("✅ Normal")
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-        # -------- VIDEO --------
-        elif uploaded.type.startswith("video"):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
-                tfile.write(file_bytes)
-                video_path = tfile.name
+                cls, conf, emg = predict(frame)
+                label = f"{cls} ({conf*100:.1f}%)"
+                color = (0, 0, 255) if emg else (0, 255, 0)
 
-            if st.button("▶ Analyze Video"):
-                cap = cv2.VideoCapture(video_path)
-                frame_box = st.empty()
+                cv2.putText(frame, label, (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
+                frame_box.image(frame, channels="BGR", use_container_width=True)
 
-                    cls, conf, emg = predict(frame)
-                    label = f"{cls} ({conf*100:.1f}%)"
-                    color = (0, 0, 255) if emg else (0, 255, 0)
-
-                    cv2.putText(frame, label, (20, 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    frame_box.image(frame, channels="BGR", use_container_width=True)
-
-                cap.release()
+            cap.release()
+            st.success("Video Analysis Completed")
