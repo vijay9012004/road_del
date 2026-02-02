@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Road Anomaly Detection</title>
+    <style>
+        body { font-family: Arial; text-align: center; }
+        img { border: 2px solid black; }
+    </style>
+</head>
+
+<body>
+
+<h2>🚦 Live Road Anomaly Detection</h2>
+<img src="/video_feed" width="720">
+
+<hr>
+
+<h2>🖼 Upload Image</h2>
+<form id="uploadForm">
+    <input type="file" name="image" required>
+    <button type="submit">Predict</button>
+</form>
+
+<p id="result"></p>
+
+<script>
+document.getElementById("uploadForm").onsubmit = async (e) => {
+    e.preventDefault();
+    let formData = new FormData(e.target);
+
+    let res = await fetch("/predict_image", {
+        method: "POST",
+        body: formData
+    });
+
+    let data = await res.json();
+    document.getElementById("result").innerHTML =
+        `<b>Prediction:</b> ${data.class}<br>
+         <b>Confidence:</b> ${(data.confidence*100).toFixed(2)}%<br>
+         <b>Emergency:</b> ${data.emergency}`;
+};
+</script>
+
+</body>
+</html>
