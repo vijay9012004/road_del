@@ -80,12 +80,12 @@ class AnomalyProcessor(VideoProcessorBase):
         label = f"{self.current_result['class']} ({self.current_result['confidence']*100:.1f}%)"
         color = (0, 0, 255) if self.current_result["emergency"] else (0, 255, 0)
 
-        # Increment anomaly count if new emergency
+        # Send Discord alert only on new emergency
         if self.current_result["emergency"] and not self.prev_anomaly:
             self.anomaly_count += 1
-            # Send Discord alert
             alert_msg = f"🚨 EMERGENCY DETECTED: {self.current_result['class']} | Confidence: {self.current_result['confidence']*100:.1f}%"
             send_discord_alert(alert_msg)
+
         self.prev_anomaly = bool(self.current_result["emergency"])
 
         # Overlay text on frame
@@ -130,21 +130,6 @@ elif mode == "Live Webcam":
     **Instructions:** This live webcam continuously monitors road scenes.  
     Any detected accident, fire, fight, snatching, or disaster will be automatically sent to Discord.
     """)
-
-    if processor and processor.video_processor:
-        stframe = st.empty()  # placeholder for video
-        while True:
-            result = processor.video_processor.current_result
-            # Display live annotated frame
-            if hasattr(processor.video_processor, "recv"):
-                frame = processor.video_processor.recv(av.VideoFrame.from_ndarray(np.zeros((224,224,3), dtype=np.uint8), format="bgr24"))
-                stframe.image(frame, channels="BGR", use_container_width=True)
-            
-            st.write("**Live Prediction Status**")
-            st.write("Prediction:", result.get("class", ""))
-            st.write("Confidence:", f"{result.get('confidence', 0)*100:.1f}%")
-            
-            time.sleep(1)  # avoid spamming
 
 # ===================== VIDEO UPLOAD =====================
 elif mode == "Upload Video":
