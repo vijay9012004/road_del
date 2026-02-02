@@ -1,92 +1,190 @@
-from flask import Flask, render_template, Response, request, jsonify
-import cv2
-import numpy as np
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import cv2, os, av, numpy as np, tempfile, gdown
 from keras.models import load_model
-import gdown
-import os
+import requests  # For Discord webhook
 
-app = Flask(__name__)
+# ===================== PAGE CONFIG =====================
+st.set_page_config(page_title="Road Anomaly Detection", layout="wide")
+st.title("Road Anomaly Detection with Discord Alerts 🚨")
 
-# ================= CONFIG =================
+# ===================== CONSTANTS =====================
 MODEL_FILE = "road_anomaly_model.h5"
 FILE_ID = "1FiHUDZPL1MFyG1g06_jjM4MJV2tH9rpg"
-
 CLASS_NAMES = ['Accident', 'Fight', 'Fire', 'Snatching']
 CONF_THRESHOLD = 0.85
 IMG_SIZE = (224, 224)
 
-# ================= DOWNLOAD MODEL =================
-if not os.path.exists(MODEL_FILE):
-    gdown.download(
-        f"https://drive.google.com/uc?id={FILE_ID}",
-        MODEL_FILE,
-        quiet=False
-    )
+# ===================== DISCORD WEBHOOK =====================
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/XXXX/YYYY"  # Replace with your webhook
 
-model = load_model(MODEL_FILE)
+def send_discord_alert(message: str):
+    """Send alert to Discord channel."""
+    payload = {"content": message}
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code != 204 and response.status_code != 200:
+            st.warning(f"Discord alert failed: {response.status_code}")
+    except Exception as e:
+        st.error(f"Discord alert error: {e}")
 
-# ================= CNN =================
-def preprocess(img):
+# ===================== MODEL DOWNLOAD =====================
+def download_model():
+    if not os.path.exists(MODEL_FILE):
+        gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE, quiet=False)
+
+download_model()
+
+@st.cache_resource
+def load_cnn_model():
+    return load_model(MODEL_FILE)
+
+model = load_cnn_model()
+
+# ===================== PREPROCESS =====================
+def preprocess_image(img):
     img = cv2.resize(img, IMG_SIZE)
     img = img.astype("float32") / 255.0
     return np.expand_dims(img, axis=0)
 
-def predict(img):
-    preds = model.predict(preprocess(img), verbose=0)
-    cid = int(np.argmax(preds))
-    conf = float(np.max(preds))
-    emergency = conf >= CONF_THRESHOLD
-    return CLASS_NAMES[cid], conf, emergency
+# ===================== PREDICTION =====================
+def predict_anomaly(img):
+    inp = preprocess_image(img)
+    preds = model.predict(inp, verbose=0)
+    class_id = int(np.argmax(preds))
+    confidence = float(np.max(preds))
+    emergency = 1 if confidence >= CONF_THRESHOLD else 0
+    return {"class": CLASS_NAMES[class_id], "confidence": confidence, "emergency": emergency}
 
-# ================= LIVE CAMERA =================
-camera = cv2.VideoCapture(0)
+# ===================== RTC CONFIG =====================
+RTC_CONFIG = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-def gen_frames():
-    while True:
-        success, frame = camera.read()
-        if not success:
-            break
+# ===================== VIDEO PROCESSOR =====================
+class AnomalyProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.anomaly_count = 0
+        self.prev_anomaly = False
+        self.current_result = {"class": "", "confidence": 0, "emergency": 0}
 
-        label, conf, emergency = predict(frame)
-        color = (0,0,255) if emergency else (0,255,0)
+    def recv(self, frame: av.VideoFrame):
+        img = frame.to_ndarray(format="bgr24")
+        self.current_result = predict_anomaly(img)
 
-        cv2.putText(frame, f"{label} ({conf*100:.1f}%)",
-                    (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        cv2.putText(frame, f"EMERGENCY: {int(emergency)}",
-                    (20,80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,0,255), 2)
+        label = f"{self.current_result['class']} ({self.current_result['confidence']*100:.1f}%)"
+        color = (0, 0, 255) if self.current_result["emergency"] else (0, 255, 0)
 
-        _, buffer = cv2.imencode(".jpg", frame)
-        frame = buffer.tobytes()
+        # Increment anomaly count if new emergency
+        if self.current_result["emergency"] and not self.prev_anomaly:
+            self.anomaly_count += 1
+            # Send Discord alert
+            alert_msg = f"🚨 EMERGENCY DETECTED: {self.current_result['class']} | Confidence: {self.current_result['confidence']*100:.1f}%"
+            send_discord_alert(alert_msg)
+        self.prev_anomaly = bool(self.current_result["emergency"])
 
-        yield (b"--frame\r\n"
-               b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+        cv2.putText(img, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        cv2.putText(img, f"Anomalies Detected: {self.anomaly_count}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2)
+        cv2.putText(img, f"EMERGENCY: {self.current_result['emergency']}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# ================= ROUTES =================
-@app.route("/")
-def index():
-    return render_template("index.html")
+# ===================== SIDEBAR =====================
+st.sidebar.image("https://img.icons8.com/ios-filled/50/000000/car.png", width=50)
+st.sidebar.title("Road Anomaly Detector")
 
-@app.route("/video_feed")
-def video_feed():
-    return Response(
-        gen_frames(),
-        mimetype="multipart/x-mixed-replace; boundary=frame"
+mode = st.sidebar.radio(
+    "Select Mode",
+    ["Live Webcam", "Upload Video", "Upload Image", "About"]
+)
+
+# ===================== ABOUT =====================
+if mode == "About":
+    st.subheader("About This Project")
+    st.markdown("""
+    **Project Name:** Road Anomaly Detector  
+    **Developer:** Vijay Ragavan  
+    **College:** Kamarajar Engineering College of Technology  
+    **Description:** Real-time road anomaly detection using CNN to detect accidents, fights, fires, or snatching events, with Discord alerts.
+    """)
+
+# ===================== LIVE WEBCAM =====================
+elif mode == "Live Webcam":
+    st.subheader("Live Road Anomaly Detection with Discord Alerts")
+    processor = webrtc_streamer(
+        key="road-anomaly",
+        video_processor_factory=AnomalyProcessor,
+        rtc_configuration=RTC_CONFIG,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=False,
     )
 
-@app.route("/predict_image", methods=["POST"])
-def predict_image():
-    file = request.files["image"]
-    img = cv2.imdecode(
-        np.frombuffer(file.read(), np.uint8),
-        cv2.IMREAD_COLOR
-    )
-    label, conf, emergency = predict(img)
-    return jsonify({
-        "class": label,
-        "confidence": conf,
-        "emergency": int(emergency)
-    })
+    if processor and processor.video_processor:
+        result = processor.video_processor.current_result
+        st.write("**Live Prediction Status**")
+        st.write("Prediction:", result.get("class", ""))
+        st.write("Confidence:", f"{result.get('confidence', 0)*100:.1f}%")
+        if result.get("emergency", 0):
+            st.error("🚨 EMERGENCY DETECTED")
+        else:
+            st.success("✅ Normal Condition")
 
-# ================= RUN =================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+# ===================== VIDEO UPLOAD =====================
+elif mode == "Upload Video":
+    st.subheader("Video Upload Analysis")
+    st.markdown("**Instructions:** Upload a video file (MP4, AVI, MOV, MPEG4) for analysis.")
+    video_file = st.file_uploader(
+        "Choose a video file", type=["mp4", "avi", "mov", "mpeg4"], accept_multiple_files=False
+    )
+
+    if video_file is not None:
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(video_file.read())
+
+        if st.button("Predict Video"):
+            cap = cv2.VideoCapture(tfile.name)
+            stframe = st.empty()
+            emergency_triggered = False
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                result = predict_anomaly(frame)
+                label = f"{result['class']} ({result['confidence']*100:.1f}%)"
+                color = (0, 0, 255) if result["emergency"] else (0, 255, 0)
+                cv2.putText(frame, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                cv2.putText(frame, f"EMERGENCY: {result['emergency']}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                stframe.image(frame, channels="BGR", use_container_width=True)
+                if result["emergency"]:
+                    emergency_triggered = True
+                    send_discord_alert(f"🚨 EMERGENCY DETECTED in video: {result['class']} | Confidence: {result['confidence']*100:.1f}%")
+
+            cap.release()
+            if emergency_triggered:
+                st.error("🚨 EMERGENCY DETECTED in Video")
+            else:
+                st.success("✅ No Critical Anomaly Detected in Video")
+
+# ===================== IMAGE UPLOAD =====================
+elif mode == "Upload Image":
+    st.subheader("Image Upload Analysis")
+    st.markdown("**Instructions:** Upload an image file (JPG, JPEG, PNG) for analysis.")
+    image_file = st.file_uploader(
+        "Choose an image file", type=["jpg", "jpeg", "png"], accept_multiple_files=False
+    )
+
+    if image_file is not None:
+        file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
+        st.image(img, channels="BGR", use_container_width=True)
+
+        if st.button("Predict Image"):
+            result = predict_anomaly(img)
+            st.markdown(f"""
+            **Prediction:** {result['class']}  
+            **Confidence:** {result['confidence']*100:.2f}%  
+            **Emergency Value:** {result['emergency']}
+            """)
+            if result["emergency"]:
+                st.error("🚨 EMERGENCY DETECTED")
+                send_discord_alert(f"🚨 EMERGENCY DETECTED in image: {result['class']} | Confidence: {result['confidence']*100:.1f}%")
+            else:
+                st.success("✅ Normal Condition")
