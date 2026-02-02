@@ -1,13 +1,10 @@
 import streamlit as st
-import cv2
-import numpy as np
-import tempfile
-import os
-import gdown
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import cv2, os, av, numpy as np, tempfile, gdown
 from keras.models import load_model
 
 # ================= PAGE CONFIG =================
-st.set_page_config("Road Anomaly Detection", layout="wide")
+st.set_page_config(page_title="Road Anomaly Detection", layout="wide")
 st.title("🚦 Road Anomaly Detection System")
 
 # ================= CONSTANTS =================
@@ -17,7 +14,7 @@ CLASS_NAMES = ["Accident", "Fight", "Fire", "Snatching"]
 CONF_THRESHOLD = 0.85
 IMG_SIZE = (224, 224)
 
-# ================= MODEL LOAD =================
+# ================= MODEL DOWNLOAD =================
 if not os.path.exists(MODEL_FILE):
     gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_FILE)
 
@@ -36,77 +33,157 @@ def preprocess(img):
 # ================= PREDICT =================
 def predict(img):
     preds = model.predict(preprocess(img), verbose=0)
-    class_id = np.argmax(preds)
+    class_id = int(np.argmax(preds))
     confidence = float(np.max(preds))
     emergency = confidence >= CONF_THRESHOLD
     return CLASS_NAMES[class_id], confidence, emergency
 
-# ================= UPLOAD UI =================
-st.markdown("""
-<style>
-div[data-testid="stFileUploader"] label {display:none;}
-div[data-testid="stFileUploader"] section {
-    padding:0; border:none; background:transparent;
-}
-div[data-testid="stFileUploader"] section button {
-    width:60px;
-    height:60px;
-    border-radius:50%;
-    font-size:30px;
-    background:#4CAF50;
-    color:white;
-    border:none;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-div[data-testid="stFileUploader"] section button:hover {
-    background:#43a047;
-}
-div[data-testid="stFileUploader"] section button p {display:none;}
-</style>
-""", unsafe_allow_html=True)
-
-uploaded = st.file_uploader(
-    "+",
-    type=["jpg", "jpeg", "png", "mp4", "avi", "mov"]
+# ================= RTC CONFIG =================
+RTC_CONFIG = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-# ================= HANDLE FILE =================
-if uploaded:
-    st.success(f"Uploaded: {uploaded.name}")
+# ================= VIDEO PROCESSOR =================
+class AnomalyProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.current_result = {}
 
-    # -------- IMAGE --------
-    if uploaded.type.startswith("image"):
-        img = cv2.imdecode(np.frombuffer(uploaded.read(), np.uint8), 1)
-        st.image(img, channels="BGR")
+    def recv(self, frame: av.VideoFrame):
+        img = frame.to_ndarray(format="bgr24")
+        cls, conf, emg = predict(img)
 
-        if st.button("🔍 Predict"):
-            cls, conf, emg = predict(img)
-            st.metric("Prediction", cls)
-            st.metric("Confidence", f"{conf*100:.2f}%")
-            st.error("🚨 EMERGENCY") if emg else st.success("✅ Normal")
+        label = f"{cls} ({conf*100:.1f}%)"
+        color = (0, 0, 255) if emg else (0, 255, 0)
 
-    # -------- VIDEO --------
-    elif uploaded.type.startswith("video"):
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded.read())
+        cv2.putText(img, label, (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        cv2.putText(img, f"EMERGENCY: {int(emg)}",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
-        if st.button("▶ Analyze Video"):
-            cap = cv2.VideoCapture(tfile.name)
-            frame_box = st.empty()
+        self.current_result = {
+            "class": cls,
+            "confidence": conf,
+            "emergency": emg
+        }
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+# ================= SIDEBAR =================
+st.sidebar.title("🚘 Navigation")
+mode = st.sidebar.radio(
+    "Select Mode",
+    ["Live Webcam", "Upload ( + )", "About"]
+)
 
-                cls, conf, emg = predict(frame)
-                label = f"{cls} ({conf*100:.1f}%)"
-                color = (0,0,255) if emg else (0,255,0)
+# ================= ABOUT =================
+if mode == "About":
+    st.subheader("About This Project")
+    st.markdown("""
+    **Project:** Road Anomaly Detection System  
+    **Developer:** Vijay Ragavan  
+    **College:** Kamarajar Engineering College of Technology  
 
-                cv2.putText(frame, label, (20,40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                frame_box.image(frame, channels="BGR")
+    Detects:
+    • Accident  
+    • Fight  
+    • Fire  
+    • Snatching  
 
-            cap.release()
+    Uses CNN for real-time safety monitoring.
+    """)
+
+# ================= LIVE WEBCAM =================
+elif mode == "Live Webcam":
+    st.subheader("📡 Live Road Monitoring")
+
+    ctx = webrtc_streamer(
+        key="road-webcam",
+        video_processor_factory=AnomalyProcessor,
+        rtc_configuration=RTC_CONFIG,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=False,
+    )
+
+    if ctx and ctx.video_processor:
+        res = ctx.video_processor.current_result
+        if res:
+            st.write("### Live Prediction")
+            st.write("Class:", res["class"])
+            st.write("Confidence:", f"{res['confidence']*100:.2f}%")
+            st.error("🚨 EMERGENCY") if res["emergency"] else st.success("✅ Normal")
+
+# ================= UPLOAD UI =================
+elif mode == "Upload ( + )":
+
+    st.subheader("⬆ Upload Image or Video")
+
+    # ---------- PLUS BUTTON STYLE ----------
+    st.markdown("""
+    <style>
+    div[data-testid="stFileUploader"] label {display:none;}
+    div[data-testid="stFileUploader"] section {
+        padding:0; border:none; background:transparent;
+    }
+    div[data-testid="stFileUploader"] section button {
+        width:60px;
+        height:60px;
+        border-radius:50%;
+        font-size:30px;
+        background:#4CAF50;
+        color:white;
+        border:none;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        margin:auto;
+    }
+    div[data-testid="stFileUploader"] section button:hover {
+        background:#43a047;
+    }
+    div[data-testid="stFileUploader"] section button p {display:none;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    uploaded = st.file_uploader(
+        "+",
+        type=["jpg", "jpeg", "png", "mp4", "avi", "mov"]
+    )
+
+    if uploaded:
+        st.success(f"Uploaded: {uploaded.name}")
+
+        # -------- IMAGE --------
+        if uploaded.type.startswith("image"):
+            img = cv2.imdecode(np.frombuffer(uploaded.read(), np.uint8), 1)
+            st.image(img, channels="BGR", use_container_width=True)
+
+            if st.button("🔍 Predict Image"):
+                cls, conf, emg = predict(img)
+                st.metric("Prediction", cls)
+                st.metric("Confidence", f"{conf*100:.2f}%")
+                st.error("🚨 EMERGENCY") if emg else st.success("✅ Normal")
+
+        # -------- VIDEO --------
+        elif uploaded.type.startswith("video"):
+            tfile = tempfile.NamedTemporaryFile(delete=False)
+            tfile.write(uploaded.read())
+
+            if st.button("▶ Analyze Video"):
+                cap = cv2.VideoCapture(tfile.name)
+                frame_box = st.empty()
+
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    cls, conf, emg = predict(frame)
+                    label = f"{cls} ({conf*100:.1f}%)"
+                    color = (0, 0, 255) if emg else (0, 255, 0)
+
+                    cv2.putText(frame, label, (20, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+
+                    frame_box.image(frame, channels="BGR", use_container_width=True)
+
+                cap.release()
