@@ -1,6 +1,9 @@
-flask
+streamlit
+streamlit-webrtc
 opencv-python
 numpy
-keras
 tensorflow
+keras
 gdown
+requests
+av
